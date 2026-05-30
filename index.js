@@ -41,7 +41,14 @@ function getSenderNumber(msg) {
 
 function isSuperOwner(msg) {
   if (msg?.key?.fromMe) return true;
-  return getSenderNumber(msg) === String(config.superOwner);
+  const sender = getSenderNumber(msg);
+
+  // superOwner puede ser string o array
+  if (Array.isArray(config.superOwner)) {
+    return config.superOwner.map(String).includes(sender);
+  }
+
+  return sender === String(config.superOwner);
 }
 
 function isOwner(msg) {
