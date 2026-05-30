@@ -3,7 +3,9 @@ import path from 'path';
 
 export default {
   name: "addalias",
-  aliases: ["alias",],
+  aliases: ["alias"],
+  ownerOnly: true,
+
   async run(sock, msg, args) {
     const jid = msg.key.remoteJid;
 
@@ -15,7 +17,6 @@ export default {
     const aliasToAdd = args.slice(1).join(" ").split(",").map(a => a.trim());
     const commandsDir = path.join(process.cwd(), 'commands');
 
-    // Función para buscar el archivo en subcarpetas
     const findFile = (dir, fileName) => {
       const items = fs.readdirSync(dir, { withFileTypes: true });
       for (const item of items) {
@@ -40,7 +41,7 @@ export default {
       let content = fs.readFileSync(filePath, 'utf8');
       const aliasRegex = /aliases:\s*\[\s*([^\]]*)\s*\]/;
       const match = content.match(aliasRegex);
-      
+
       let currentAliases = [];
       if (match && match[1]) {
         currentAliases = match[1].split(',').map(a => a.replace(/["']/g, "").trim()).filter(a => a !== "");
@@ -57,8 +58,8 @@ export default {
 
       fs.writeFileSync(filePath, content, 'utf8');
 
-      await sock.sendMessage(jid, { 
-        text: `✅ *Actualizado en:* _${path.relative(commandsDir, filePath)}_\n\n*Comando:* ${commandName}\n*Lista:* ${updatedAliases.join(", ")}` 
+      await sock.sendMessage(jid, {
+        text: `✅ *Actualizado en:* _${path.relative(commandsDir, filePath)}_\n\n*Comando:* ${commandName}\n*Lista:* ${updatedAliases.join(", ")}`
       }, { quoted: msg });
 
     } catch (error) {

@@ -1,5 +1,6 @@
 export default {
   name: "res",
+  superOwnerOnly: true,
 
   async run(sock, msg, args, chatId) {
 

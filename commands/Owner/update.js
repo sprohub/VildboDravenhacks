@@ -4,6 +4,7 @@ import { exec } from "child_process";
 export default {
   name: "up",
   aliases: ["actualizar"],
+  ownerOnly: true,
 
   async run(sock, msg, args, chatId) {
 
@@ -31,7 +32,6 @@ git clone URL_DEL_REPOSITORIO`
         async (error, stdout, stderr) => {
 
           if (error) {
-
             return await sock.sendMessage(chatId, {
               text:
 `❌ Error durante la actualización
