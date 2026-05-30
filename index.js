@@ -35,12 +35,23 @@ function normalizeJidToNumber(jid = "") {
 }
 
 function getSenderNumber(msg) {
-  const jid = msg?.key?.participant || msg?.key?.remoteJid || "";
+  const remoteJid = msg?.key?.remoteJid || "";
+  const isGroup   = remoteJid.endsWith("@g.us");
+
+  // En grupos el sender real viene en participant
+  // En privado el sender es el remoteJid
+  const jid = isGroup
+    ? (msg?.key?.participant || "")
+    : remoteJid;
+
   return normalizeJidToNumber(jid);
 }
 
 function isSuperOwner(msg) {
+  // fromMe=true significa que lo envió el dispositivo vinculado (owner)
+  // En grupos con @lid el número real no llega, así que confiamos en fromMe
   if (msg?.key?.fromMe) return true;
+
   const sender = getSenderNumber(msg);
 
   // superOwner puede ser string o array
