@@ -38,7 +38,7 @@ export default {
     await sock.sendMessage(chatId, {
       text: [
         "╔══════════════════════════════╗",
-        "   🤖  LUCHO DIAS HACKS     ",
+        "   🤖  ✦ 𝙎𝙋𝙍𝙊𝙃𝘽𝙊𝙏 ✦     ",
         "╚══════════════════════════════╝",
         "",
         `📦 *Versión:*    v${version}`,
