@@ -48,18 +48,24 @@ function getSenderNumber(msg) {
 }
 
 function isSuperOwner(msg) {
-  // fromMe=true significa que lo envió el dispositivo vinculado (owner)
-  // En grupos con @lid el número real no llega, así que confiamos en fromMe
+  // fromMe=true = lo envió el dispositivo vinculado
   if (msg?.key?.fromMe) return true;
 
-  const sender = getSenderNumber(msg);
+  // Extraer número o LID del participant/remoteJid
+  const jid = msg?.key?.participant || msg?.key?.remoteJid || "";
+  const sender = normalizeJidToNumber(jid);  // funciona para @s.whatsapp.net y @lid
 
-  // superOwner puede ser string o array
-  if (Array.isArray(config.superOwner)) {
-    return config.superOwner.map(String).includes(sender);
-  }
+  const list = Array.isArray(config.superOwner)
+    ? config.superOwner
+    : [config.superOwner];
 
-  return sender === String(config.superOwner);
+  // Comparar contra números Y contra LIDs guardados en config
+  const allAllowed = [
+    ...list.map(String),
+    ...(Array.isArray(config.superOwnerLid) ? config.superOwnerLid.map(String) : []),
+  ];
+
+  return allAllowed.includes(sender);
 }
 
 function isOwner(msg) {
