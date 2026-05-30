@@ -12,6 +12,7 @@ import pino from "pino";
 import config from "./config.js";
 
 import log from "./logger.js";
+import { isBanned } from "./commands/admin/ban.js";
 import { downloadAndSave } from "./commands/media/vv.js";
 import { registerAntiDelete } from "./plugins/antiDelete.js";
 
@@ -416,6 +417,13 @@ async function startBot() {
 
     const command = commands.get(commandName);
     if (!command) return;
+
+    // ── Verificar ban ─────────────────────────────────────────────────────
+    const senderJidFull = msg?.key?.participant || msg?.key?.remoteJid || "";
+    if (!msg?.key?.fromMe && isBanned(senderJidFull)) {
+      log.ban(`Baneado ignorado: ${senderJidFull}`);
+      return;
+    }
 
     // ── Control de acceso por rol ─────────────────────────────────────────
     const senderIsOwner      = isOwner(msg);
