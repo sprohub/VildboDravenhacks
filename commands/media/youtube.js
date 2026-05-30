@@ -3,26 +3,19 @@ import path from "path";
 import axios from "axios";
 import { pipeline } from "stream/promises";
 import { spawn } from "child_process";
-import { TEMP_DIR } from "../../config.js";
+import config from "../../config.js";
+import { reply, safeFileName, tempPath } from "../../utils.js";
 
-const API_BASE = process.env.DV_API_URL;
-const APIKEY   = process.env.DV_API_KEY;
-const REQUEST_TIMEOUT = 120000;
-const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
-const AUDIO_QUALITY = "128k";
+const API_BASE          = config.apiBase;
+const APIKEY            = config.apiKey;
+const TEMP_DIR          = config.tempDir;
+const REQUEST_TIMEOUT   = 120000;
+const MAX_AUDIO_BYTES   = 100 * 1024 * 1024;
+const AUDIO_QUALITY     = "128k";
 
-function safeFileName(name) {
-  return String(name || "audio")
-    .replace(/[\\/:*?"<>|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80) || "audio";
-}
-
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function deleteFileSafe(fp) {
-  try {
-    if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
-  } catch {}
+  try { if (fp && fs.existsSync(fp)) fs.unlinkSync(fp); } catch {}
 }
 
 function extractYouTubeUrl(text) {
@@ -36,15 +29,11 @@ function isHttpUrl(v) {
   return /^https?:\/\//i.test(String(v || ""));
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 function detectAudioType(fp) {
   try {
-    const fd = fs.openSync(fp, "r");
+    const fd  = fs.openSync(fp, "r");
     const buf = Buffer.alloc(16);
-    const n = fs.readSync(fd, buf, 0, 16, 0);
+    const n   = fs.readSync(fd, buf, 0, 16, 0);
     fs.closeSync(fd);
     const s = buf.subarray(0, n);
     if (s.length >= 8 && s.subarray(4, 8).toString("ascii") === "ftyp")
@@ -69,56 +58,42 @@ function parseContentDisposition(h) {
   return n?.[1]?.trim() || "";
 }
 
-// Buscar en YouTube usando scraping de página de búsqueda
+// ─── Búsqueda en YouTube ──────────────────────────────────────────────────────
 async function searchYouTube(query) {
-  console.log("[YTSEARCH] Buscando:", query);
-
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-
   const { data: html } = await axios.get(searchUrl, {
     timeout: 15000,
     headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
       "Accept-Language": "es-ES,es;q=0.9",
     },
   });
 
-  // Extraer datos del JSON que YouTube embebe en la página
   const match = html.match(/var ytInitialData = ({.+?});<\/script>/s);
   if (!match) throw new Error("No se pudo obtener resultados de YouTube.");
 
-  const ytData = JSON.parse(match[1]);
+  const ytData   = JSON.parse(match[1]);
   const contents =
     ytData?.contents?.twoColumnSearchResultsRenderer?.primaryContents
       ?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
 
-  // Buscar el primer video
   for (const item of contents) {
     const video = item?.videoRenderer;
     if (!video?.videoId) continue;
-
-    const videoId = video.videoId;
-    const title = video.title?.runs?.[0]?.text || "audio";
-    const thumbnail = `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`;
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-
-    console.log("[YTSEARCH] Encontrado:", title, videoUrl);
-    return { videoUrl, title: safeFileName(title), thumbnail };
+    return {
+      videoUrl:  `https://www.youtube.com/watch?v=${video.videoId}`,
+      title:     safeFileName(video.title?.runs?.[0]?.text || "audio"),
+      thumbnail: `https://i.ytimg.com/vi/${video.videoId}/sddefault.jpg`,
+    };
   }
 
   throw new Error("No se encontraron videos para esa búsqueda.");
 }
 
-// Obtener link de descarga MP3
+// ─── Obtener link de descarga ─────────────────────────────────────────────────
 async function getAudioLink(videoUrl) {
-  console.log("[YTMP3] Obteniendo link para:", videoUrl);
-
   const res = await axios.get(`${API_BASE}/ytmp3`, {
-    params: {
-      url: videoUrl,
-      quality: AUDIO_QUALITY,
-      apikey: APIKEY,
-    },
+    params: { url: videoUrl, quality: AUDIO_QUALITY, apikey: APIKEY },
     timeout: 60000,
     validateStatus: () => true,
     headers: {
@@ -128,54 +103,42 @@ async function getAudioLink(videoUrl) {
     },
   });
 
-  console.log("[YTMP3] Status:", res.status);
-  console.log("[YTMP3] Data:", JSON.stringify(res.data, null, 2));
-
   const d = res.data;
-  if (res.status >= 400 || d?.ok === false) {
+  if (res.status >= 400 || d?.ok === false)
     throw new Error(d?.detail || d?.message || `HTTP ${res.status}`);
-  }
 
   const dlUrl =
-    d?.download_url_full ||
-    d?.stream_url_full ||
-    d?.download_url ||
-    d?.stream_url ||
-    d?.url || "";
+    d?.download_url_full || d?.stream_url_full ||
+    d?.download_url      || d?.stream_url      || d?.url || "";
 
   if (!dlUrl) throw new Error("La API no devolvió link de descarga.");
 
   return {
-    dlUrl: dlUrl.startsWith("/") ? `${process.env.DV_API_URL}${dlUrl}` : dlUrl,
-    title: safeFileName(d?.title || "audio"),
-    fileName: d?.filename || "audio.mp3",
+    dlUrl:     dlUrl.startsWith("/") ? `${API_BASE}${dlUrl}` : dlUrl,
+    title:     safeFileName(d?.title || "audio"),
+    fileName:  d?.filename || "audio.mp3",
     thumbnail: d?.thumbnail || null,
   };
 }
 
+// ─── Descargar audio ──────────────────────────────────────────────────────────
 async function downloadAudio(downloadUrl, outputPath) {
   const response = await axios.get(downloadUrl, {
     responseType: "stream",
     timeout: REQUEST_TIMEOUT,
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      Accept: "*/*",
-      "x-api-key": APIKEY,
-    },
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*", "x-api-key": APIKEY },
     validateStatus: () => true,
     maxRedirects: 10,
   });
 
-  if (response.status >= 400) {
+  if (response.status >= 400)
     throw new Error(`Error al descargar: HTTP ${response.status}`);
-  }
 
   let downloaded = 0;
   response.data.on("data", (chunk) => {
     downloaded += chunk.length;
-    if (downloaded > MAX_AUDIO_BYTES) {
+    if (downloaded > MAX_AUDIO_BYTES)
       response.data.destroy(new Error("Audio demasiado grande."));
-    }
   });
 
   try {
@@ -194,18 +157,19 @@ async function downloadAudio(downloadUrl, outputPath) {
   }
 
   const detectedName = parseContentDisposition(response.headers?.["content-disposition"]);
-  const sniffed = detectAudioType(outputPath);
-  const ext = sniffed?.ext || "mp3";
-  const base = safeFileName(path.parse(detectedName || "audio").name || "audio");
+  const sniffed      = detectAudioType(outputPath);
+  const ext          = sniffed?.ext || "mp3";
+  const base         = safeFileName(path.parse(detectedName || "audio").name || "audio");
 
   return {
     size,
     fileName: `${base}.${ext}`,
-    mime: sniffed?.mime || "audio/mpeg",
-    isMp3: sniffed?.isMp3 ?? true,
+    mime:     sniffed?.mime || "audio/mpeg",
+    isMp3:    sniffed?.isMp3 ?? true,
   };
 }
 
+// ─── Convertir a MP3 ──────────────────────────────────────────────────────────
 async function convertToMp3(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     const ff = spawn("ffmpeg", [
@@ -229,18 +193,17 @@ async function convertToMp3(inputPath, outputPath) {
   });
 }
 
+// ─── Comando ──────────────────────────────────────────────────────────────────
 export default {
   name: "ytmp3",
   aliases: ["play", "mp3", "song"],
-  run: async (sock, msg, args, jid) => {
-    const { reply } = await import("../../utils.js");
-    const quoted = { quoted: msg };
 
+  async run(sock, msg, args, jid) {
     const input = args.join(" ").trim();
 
     if (!input) {
       return reply(sock, jid,
-        "❌ *Uso:*\n.play <nombre de canción>\n.play <link de YouTube>",
+        "❌ *Uso:*\n`.play <nombre de canción>`\n`.play <link de YouTube>`",
         msg
       );
     }
@@ -253,11 +216,9 @@ export default {
       let title     = "audio";
       let thumbnail = null;
 
-      // Si no es URL buscar en YouTube
       if (!videoUrl) {
-        if (isHttpUrl(input)) {
+        if (isHttpUrl(input))
           return reply(sock, jid, "❌ Envía un link válido de YouTube.", msg);
-        }
 
         await reply(sock, jid, `🔍 Buscando: *${input}*...`, msg);
 
@@ -267,82 +228,72 @@ export default {
         thumbnail = search.thumbnail;
       }
 
-      // Mostrar thumbnail mientras descarga
       if (thumbnail) {
         await sock.sendMessage(jid, {
           image: { url: thumbnail },
-          caption:
-`🎵 *Descargando audio...*
-🎧 ${title}
-🎚️ Calidad: ${AUDIO_QUALITY}
-⏳ Espera un momento...`,
-        }, quoted);
+          caption: [
+            "🎵 *Descargando audio...*",
+            `🎧 ${title}`,
+            `🎚️ Calidad: ${AUDIO_QUALITY}`,
+            "⏳ Espera un momento...",
+          ].join("\n"),
+        }, { quoted: msg });
       } else {
         await reply(sock, jid, `🎵 *Descargando:* ${title}\n⏳ Espera...`, msg);
       }
 
-      // Obtener link de la API
-      const link = await getAudioLink(videoUrl);
-      title = link.title || title;
-
-      // Descargar audio
+      const link      = await getAudioLink(videoUrl);
+      title           = link.title || title;
       const audioInfo = await downloadAudio(link.dlUrl, sourceFile);
 
       let fileToSend     = sourceFile;
       let fileNameToSend = audioInfo.fileName || `${safeFileName(title)}.mp3`;
       let mimeToSend     = audioInfo.mime;
 
-      // Convertir si no es mp3
       if (!audioInfo.isMp3) {
         try {
           await convertToMp3(sourceFile, mp3File);
           fileToSend     = mp3File;
           fileNameToSend = `${safeFileName(title)}.mp3`;
           mimeToSend     = "audio/mpeg";
-        } catch (convErr) {
-          console.error("[YTMP3 CONV ERROR]", convErr.message);
-          // Enviar como documento si falla la conversión
+        } catch {
           await sock.sendMessage(jid, {
             document: { url: fileToSend },
             mimetype: mimeToSend,
             fileName: fileNameToSend,
             caption: `🎵 ${title}`,
-          }, quoted);
+          }, { quoted: msg });
           return;
         }
       }
 
-      // Enviar como audio
       try {
         await sock.sendMessage(jid, {
           audio: { url: fileToSend },
           mimetype: "audio/mpeg",
           ptt: false,
           fileName: fileNameToSend,
-        }, quoted);
+        }, { quoted: msg });
       } catch {
-        // Fallback como documento
         await sock.sendMessage(jid, {
           document: { url: fileToSend },
           mimetype: mimeToSend,
           fileName: fileNameToSend,
           caption: `🎵 ${title}`,
-        }, quoted);
+        }, { quoted: msg });
       }
 
     } catch (e) {
-      console.error("[YTMP3 ERROR]", e.message);
-      const rawMsg = String(e?.message || "").toLowerCase();
+      const raw = String(e?.message || "").toLowerCase();
       let humanMsg = `❌ ${e.message || "Error al descargar el audio."}`;
 
-      if (rawMsg.includes("bad gateway") || rawMsg.includes("502") || rawMsg.includes("503")) {
+      if (raw.includes("bad gateway") || raw.includes("502") || raw.includes("503"))
         humanMsg = "⚠️ El servidor de descargas está saturado.\n🔁 Intenta más tarde.";
-      }
 
       await reply(sock, jid, humanMsg, msg);
     } finally {
       deleteFileSafe(sourceFile);
       deleteFileSafe(mp3File);
     }
-  },
+  }
 };
