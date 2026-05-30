@@ -2,7 +2,7 @@ import fs from "fs";
 import { exec } from "child_process";
 
 export default {
-  name: "update",
+  name: "up",
   aliases: ["actualizar"],
 
   async run(sock, msg, args, chatId) {
