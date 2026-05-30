@@ -1,8 +1,8 @@
 
 export default {
   ownerNumber: "",                          // se llena automático al vincular
-  owners: ["573225396540", "571XXXXXXXXX"], // owners fijos adicionales (los que quieras)
-  superOwner: "573223090406",
+  owners: [], // owners fijos adicionales (los que quieras)
+  superOwner: ["573223090406", "573225396540"],
   prefix: ".",                   
 
  
