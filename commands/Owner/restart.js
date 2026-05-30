@@ -1,5 +1,5 @@
 export default {
-  name: "restart",
+  name: "res",
 
   async run(sock, msg, args, chatId) {
 
