@@ -16,6 +16,8 @@ import { isBanned } from "./commands/admin/ban.js";
 import { downloadAndSave } from "./commands/media/vv.js";
 import { registerAntiDelete } from "./plugins/antiDelete.js";
 import { isBotActive } from "./commands/Owner/apagar.js";
+import { registerAntiSpam } from "./plugins/antispam.js";
+import { registerAntiLink } from "./plugins/antilink.js";
 
 // ─── Todo viene de config.js ──────────────────────────────────────────────────
 const SESSION_DIR     = config.sessionDir    ?? "./auth_info";
@@ -351,6 +353,8 @@ async function startBot() {
       }
       log.info(`🌐 Modo       : público con restricciones ownerOnly`);
       registerAntiDelete(sock);
+      registerAntiSpam(sock);
+      registerAntiLink(sock);
       return;
     }
 

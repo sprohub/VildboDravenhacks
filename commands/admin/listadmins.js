@@ -1,8 +1,8 @@
 export default {
-  name: "tagall",
-  aliases: ["invocar", "todos"],
+  name: "listadmins",
+  aliases: ["admins", "adminslist"],
   ownerOnly: true,
-  cooldown: 5000,
+  cooldown: 3000,
 
   async run(sock, msg, args, chatId) {
     if (!chatId.endsWith("@g.us")) {
@@ -14,19 +14,19 @@ export default {
     try {
       const metadata = await sock.groupMetadata(chatId);
 
-      const mentions = metadata.participants.map(p => p.id);
+      const admins = metadata.participants.filter(
+        p => p.admin === "admin" || p.admin === "superadmin"
+      );
 
-      let texto = args.length
-        ? args.join(" ") + "\n\n"
-        : "📢 Invocando a todos:\n\n";
+      let text = `👑 *Administradores de ${metadata.subject}*\n\n`;
 
-      for (const user of mentions) {
-        texto += `➤ @${user.split("@")[0]}\n`;
+      for (const admin of admins) {
+        text += `➤ @${admin.id.split("@")[0]}\n`;
       }
 
       await sock.sendMessage(chatId, {
-        text: texto,
-        mentions
+        text,
+        mentions: admins.map(a => a.id)
       }, { quoted: msg });
 
     } catch (e) {

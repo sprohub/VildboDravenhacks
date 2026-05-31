@@ -1,6 +1,6 @@
 export default {
-  name: "tagall",
-  aliases: ["invocar", "todos"],
+  name: "hidetag",
+  aliases: ["notify"],
   ownerOnly: true,
   cooldown: 5000,
 
@@ -16,13 +16,9 @@ export default {
 
       const mentions = metadata.participants.map(p => p.id);
 
-      let texto = args.length
-        ? args.join(" ") + "\n\n"
-        : "📢 Invocando a todos:\n\n";
-
-      for (const user of mentions) {
-        texto += `➤ @${user.split("@")[0]}\n`;
-      }
+      const texto = args.length
+        ? args.join(" ")
+        : "📢 Mensaje para todos.";
 
       await sock.sendMessage(chatId, {
         text: texto,

@@ -1,6 +1,6 @@
 export default {
-  name: "tagall",
-  aliases: ["invocar", "todos"],
+  name: "resetlink",
+  aliases: ["revoke", "revokelink"],
   ownerOnly: true,
   cooldown: 5000,
 
@@ -12,21 +12,10 @@ export default {
     }
 
     try {
-      const metadata = await sock.groupMetadata(chatId);
-
-      const mentions = metadata.participants.map(p => p.id);
-
-      let texto = args.length
-        ? args.join(" ") + "\n\n"
-        : "📢 Invocando a todos:\n\n";
-
-      for (const user of mentions) {
-        texto += `➤ @${user.split("@")[0]}\n`;
-      }
+      const code = await sock.groupRevokeInvite(chatId);
 
       await sock.sendMessage(chatId, {
-        text: texto,
-        mentions
+        text: `✅ Link regenerado.\n\n🔗 Nuevo enlace:\nhttps://chat.whatsapp.com/${code}`
       }, { quoted: msg });
 
     } catch (e) {
