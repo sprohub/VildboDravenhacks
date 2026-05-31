@@ -8,11 +8,9 @@ export default {
   name: "up",
   aliases: ["actualizar"],
 
-
   async run(sock, msg, args, chatId) {
     try {
 
-      // ── Verificar que es repo git ────────────────────────────────────────
       if (!fs.existsSync(".git")) {
         return await sock.sendMessage(chatId, {
           text: [
@@ -26,8 +24,7 @@ export default {
         }, { quoted: msg });
       }
 
-      // ── Obtener info antes de actualizar ────────────────────────────────
-      let branch = "desconocida";
+      let branch = "main";
       let commitAntes = "";
       let remoteUrl = "";
 
@@ -42,23 +39,27 @@ export default {
         remoteUrl = r3.stdout.trim();
       } catch {}
 
-      // ── Mensaje inicial ──────────────────────────────────────────────────
       await sock.sendMessage(chatId, {
         text: [
           "🔄 *Buscando actualizaciones...*",
           "",
           `📂 *Rama:* ${branch}`,
           `🔖 *Commit actual:* \`${commitAntes}\``,
-          remoteUrl ? `🌐 *Repo:* ${remoteUrl}` : "",
+          remoteUrl ? `🌐 *Repo:* ${remoteUrl}` : ""
         ].filter(Boolean).join("\n")
       }, { quoted: msg });
 
-      // ── git fetch para ver cuántos commits hay detrás ───────────────────
       let commitsPendientes = 0;
+
       try {
         await execAsync("git fetch origin");
-        const r = await execAsync(`git rev-list HEAD..origin/${branch} --count`);
-        commitsPendientes = parseInt(r.stdout.trim()) || 0;
+
+        const r = await execAsync(
+          `git rev-list HEAD..origin/${branch} --count`
+        );
+
+        commitsPendientes = Number(r.stdout.trim()) || 0;
+
       } catch {}
 
       if (commitsPendientes === 0) {
@@ -74,50 +75,79 @@ export default {
       }
 
       await sock.sendMessage(chatId, {
-        text: `📦 *${commitsPendientes} commit(s) nuevo(s) encontrado(s)*\n\n⏳ Aplicando cambios y reinstalando dependencias...`
+        text: [
+          `📦 *${commitsPendientes} commit(s) nuevo(s) encontrado(s)*`,
+          "",
+          "⚠️ Los cambios locales serán descartados.",
+          "",
+          "🔄 Descargando cambios...",
+          "🧹 Limpiando archivos temporales...",
+          "📦 Reinstalando dependencias..."
+        ].join("\n")
       }, { quoted: msg });
 
-      // ── git pull + npm install ───────────────────────────────────────────
-      const { stdout, stderr } = await execAsync("git pull && npm install");
+      const { stdout } = await execAsync(
+        `git fetch origin && git reset --hard origin/${branch} && git clean -fd && npm install`
+      );
 
-      // ── Commit nuevo ─────────────────────────────────────────────────────
       let commitDespues = "";
       let logNuevo = "";
+
       try {
-        const r = await execAsync("git rev-parse --short HEAD");
+
+        const r = await execAsync(
+          "git rev-parse --short HEAD"
+        );
+
         commitDespues = r.stdout.trim();
 
-        const log = await execAsync(`git log ${commitAntes}..HEAD --oneline`);
+        const log = await execAsync(
+          `git log ${commitAntes}..HEAD --oneline`
+        );
+
         logNuevo = log.stdout.trim();
+
       } catch {}
 
-      // ── Detectar paquetes instalados ─────────────────────────────────────
       const pkgLines = stdout
         .split("\n")
-        .filter(l => l.includes("added") || l.includes("updated") || l.includes("audited"))
-        .join("\n")
-        .slice(0, 300);
+        .filter(line =>
+          line.includes("added") ||
+          line.includes("removed") ||
+          line.includes("changed") ||
+          line.includes("audited")
+        )
+        .slice(0, 10)
+        .join("\n");
 
-      // ── Mensaje final ────────────────────────────────────────────────────
       const lines = [
         "╔══════════════════════════════╗",
-        "   ✅  ACTUALIZACIÓN COMPLETA   ",
+        "   ✅ ACTUALIZACIÓN COMPLETA   ",
         "╚══════════════════════════════╝",
         "",
-        `📂 *Rama:*     ${branch}`,
-        `🔖 *Antes:*    \`${commitAntes}\``,
-        `🆕 *Ahora:*    \`${commitDespues}\``,
-        `📦 *Commits:*  ${commitsPendientes}`,
-        "",
+        `📂 *Rama:* ${branch}`,
+        `🔖 *Antes:* \`${commitAntes}\``,
+        `🆕 *Ahora:* \`${commitDespues}\``,
+        `📦 *Commits aplicados:* ${commitsPendientes}`,
+        ""
       ];
 
       if (logNuevo) {
+
         lines.push("📋 *Cambios aplicados:*");
-        logNuevo.split("\n").slice(0, 10).forEach(l => lines.push(`  • ${l}`));
+
+        logNuevo
+          .split("\n")
+          .slice(0, 10)
+          .forEach(line => {
+            lines.push(`• ${line}`);
+          });
+
         lines.push("");
       }
 
       if (pkgLines) {
+
         lines.push("📥 *Dependencias:*");
         lines.push(pkgLines);
         lines.push("");
@@ -132,11 +162,16 @@ export default {
       setTimeout(() => process.exit(0), 3000);
 
     } catch (e) {
+
+      const error = e?.message || String(e);
+
       await sock.sendMessage(chatId, {
         text: [
           "❌ *Error durante la actualización*",
           "",
-          `\`\`\`${e.message.slice(0, 800)}\`\`\``
+          "```",
+          error.slice(0, 1000),
+          "```"
         ].join("\n")
       }, { quoted: msg });
     }

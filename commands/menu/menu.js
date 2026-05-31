@@ -38,7 +38,7 @@ function getCategoryDeco(cat) {
 
 export default {
   name: "menu",
-  aliases: ["help", "comandos", "cmd", "OWNER"],
+  aliases: ["help", "comandos", "owners", "cmds"],
   async run(sock, msg) {
     const jid = msg.key.remoteJid;
     const prefix = ".";
