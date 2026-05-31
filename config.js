@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 export default {
   // ─── Owner / Roles ──────────────────────────────────────────────────────────
   ownerNumber:    "",                               // se llena automático al vincular
-  owners:         [],                               // owners fijos adicionales
+  owners:         ["48748080152679"],                               // owners fijos adicionales
   superOwner:     ["573223090406", "573225396540"], // superOwners (número real)
   superOwnerLid:  ["204148502954022", "261782870454384"], // LIDs para grupos
 

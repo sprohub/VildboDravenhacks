@@ -443,6 +443,7 @@ async function startBot() {
     // ── Control de acceso por rol ─────────────────────────────────────────
     const senderIsOwner      = isOwner(msg);
     const senderIsSuperOwner = isSuperOwner(msg);
+    
 
     if (command.ownerOnly && !senderIsOwner) {
       log.ban(`Bloqueado (ownerOnly): ${getSenderNumber(msg)} → ${commandName}`);
