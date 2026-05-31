@@ -15,6 +15,7 @@ import log from "./logger.js";
 import { isBanned } from "./commands/admin/ban.js";
 import { downloadAndSave } from "./commands/media/vv.js";
 import { registerAntiDelete } from "./plugins/antiDelete.js";
+import { isBotActive } from "./commands/Owner/apagar.js";
 
 // ─── Todo viene de config.js ──────────────────────────────────────────────────
 const SESSION_DIR     = config.sessionDir    ?? "./auth_info";
@@ -414,6 +415,16 @@ async function startBot() {
     const [rawCmd, ...args] = text.split(/\s+/);
     const commandName = rawCmd?.toLowerCase();
     if (!commandName) return;
+
+    // ── BLOQUE 3: Verificar si el bot está activo en este grupo ──────────
+    const remoteJid = msg?.key?.remoteJid || "";
+    const isGroup   = remoteJid.endsWith("@g.us");
+
+    if (isGroup && !isBotActive(remoteJid)) {
+      // superOwner siempre pasa, sin importar el comando ni el estado del bot
+      if (!isSuperOwner(msg)) return;
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     const command = commands.get(commandName);
     if (!command) return;
