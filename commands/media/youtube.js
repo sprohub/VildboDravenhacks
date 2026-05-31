@@ -1,535 +1,299 @@
-/* Copyright (C) 2022 Sourav KL11.
-Licensed under the  GPL-3.0 License;
-you may not use this file except in compliance with the License.
-Raganork MD - Sourav KL11
-*/
-const {
-  Module
-} = require('../main');
-const {
-  MODE,
-  HANDLERS,
-  BOT_INFO,
-  settingsMenu
-} = require('../config');
-const config = require('../config');
-const ffmpeg = require('fluent-ffmpeg');
-// let parseBotJid = (id) => id+"@s.whatsapp.net";
-const {
-  getString
-} = require('./misc/lang');
-const {
-  getJson
-} = require('./misc/misc');
-const {
-    ytTitle,downloadYT, dlSong, ytv, getResolutions, getSearchImage, searchYT
-  } = require('./misc/yt');
-const Lang = getString('scrapers');
-const {setVar} = require('./manage');
-const {
-  skbuffer,
-  addInfo
-} = require('raganork-bot');
-let configs = settingsMenu
-var handler = HANDLERS !== 'false'?HANDLERS.split("")[0]:""
-let fm = MODE == 'public' ? false : true
-const getID = /(?:http(?:s|):\/\/|)(?:(?:www\.|)youtube(?:\-nocookie|)\.com\/(?:watch\?.*(?:|\&)v=|embed|shorts\/|v\/)|youtu\.be\/)([-_0-9A-Za-z]{11})/;
-Module({
-  pattern: 'play ?(.*)',
-  fromMe: fm,
-  desc: "Play audios from YouTube",
-  usage:'.play starboy',
-  use: 'download'
-}, (async (message, match) => {
-if (!match[1]) return message.sendReply("_Need song name, eg: .play starboy_")
-if (match[1].includes('open.spotify.com')) return message.sendReply("_Please use the .spotify command!_")
-let sr = (await searchYT(match[1])).videos[0];
-  const title = await ytTitle(sr.id)
-  await message.sendReply(`*Downloading:* _${title}_`)
-  let sdl = await dlSong(sr.id);
-  ffmpeg(sdl)
-  .save('./temp/song.mp3')
-  .on('end', async () => { 
-  var song = await addInfo('./temp/song.mp3',title,BOT_INFO.split(";")[0],"Raganork audio downloader",await skbuffer(`https://i3.ytimg.com/vi/${sr.id}/hqdefault.jpg`))
-  return await message.client.sendMessage(message.jid, {
-      audio:song,
-      mimetype: 'audio/mp4'
-  }, {
-      quoted: message.data
+import fs from "fs";
+import path from "path";
+import axios from "axios";
+import { pipeline } from "stream/promises";
+import { spawn } from "child_process";
+import config from "../../config.js";
+import { reply, safeFileName, tempPath } from "../../utils.js";
+
+const API_BASE          = config.apiBase;
+const APIKEY            = config.apiKey;
+const TEMP_DIR          = config.tempDir;
+const REQUEST_TIMEOUT   = 120000;
+const MAX_AUDIO_BYTES   = 100 * 1024 * 1024;
+const AUDIO_QUALITY     = "128k";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function deleteFileSafe(fp) {
+  try { if (fp && fs.existsSync(fp)) fs.unlinkSync(fp); } catch {}
+}
+
+function extractYouTubeUrl(text) {
+  const m = String(text || "").match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com|music\.youtube\.com|youtu\.be)\/[^\s]+/i
+  );
+  return m ? m[0].trim() : "";
+}
+
+function isHttpUrl(v) {
+  return /^https?:\/\//i.test(String(v || ""));
+}
+
+function detectAudioType(fp) {
+  try {
+    const fd  = fs.openSync(fp, "r");
+    const buf = Buffer.alloc(16);
+    const n   = fs.readSync(fd, buf, 0, 16, 0);
+    fs.closeSync(fd);
+    const s = buf.subarray(0, n);
+    if (s.length >= 8 && s.subarray(4, 8).toString("ascii") === "ftyp")
+      return { ext: "m4a", mime: "audio/mp4", isMp3: false };
+    if (s.length >= 3 && s.subarray(0, 3).toString("ascii") === "ID3")
+      return { ext: "mp3", mime: "audio/mpeg", isMp3: true };
+    if (s.length >= 2 && s[0] === 0xff && (s[1] & 0xe0) === 0xe0)
+      return { ext: "mp3", mime: "audio/mpeg", isMp3: true };
+    if (s.length >= 4 && s[0] === 0x1a && s[1] === 0x45)
+      return { ext: "webm", mime: "audio/webm", isMp3: false };
+  } catch {}
+  return null;
+}
+
+function parseContentDisposition(h) {
+  const t = String(h || "");
+  const u = t.match(/filename\*=UTF-8''([^;]+)/i);
+  if (u?.[1]) {
+    try { return decodeURIComponent(u[1]).replace(/["']/g, "").trim(); } catch {}
+  }
+  const n = t.match(/filename="?([^"]+)"?/i);
+  return n?.[1]?.trim() || "";
+}
+
+// ─── Búsqueda en YouTube ──────────────────────────────────────────────────────
+async function searchYouTube(query) {
+  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+  const { data: html } = await axios.get(searchUrl, {
+    timeout: 15000,
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "es-ES,es;q=0.9",
+    },
   });
-});
-}));
-Module({
-  pattern: 'spotify ?(.*)',
-  fromMe: fm,
-  desc: "Spotify audio downloader",
-  usage:'.spotify link here',
-  use: 'download'
-}, (async (message, match) => {
-  match[1] = match[1].match(/\bhttps?:\/\/\S+/gi)?.[0]
-if (!match[1]) return message.sendReply("_Need a spotify URL_")
-  let spotifyTitle = await require("axios")(`https://api.raganork.online/api/spotify?url=${match[1]}`)
-  if (!spotifyTitle.data.result) return message.sendReply("_Download failed, please search the same using the .song command_")
-  let sr = (await searchYT(spotifyTitle.data.result)).videos[0];
-  const title = await ytTitle(sr.id)
-  await message.sendReply(`*Downloading:* _${title}_`)
-  let sdl = await dlSong(sr.id);
-  ffmpeg(sdl)
-  .save('./temp/song.mp3')
-  .on('end', async () => { 
-  var song = await addInfo('./temp/song.mp3',title,BOT_INFO.split(";")[0],"Raganork audio downloader",await skbuffer(`https://i3.ytimg.com/vi/${sr.id}/hqdefault.jpg`))
-  return await message.client.sendMessage(message.jid, {
-      audio:song,
-      mimetype: 'audio/mp4'
-  }, {
-      quoted: message.data
+
+  const match = html.match(/var ytInitialData = ({.+?});<\/script>/s);
+  if (!match) throw new Error("No se pudo obtener resultados de YouTube.");
+
+  const ytData   = JSON.parse(match[1]);
+  const contents =
+    ytData?.contents?.twoColumnSearchResultsRenderer?.primaryContents
+      ?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
+
+  for (const item of contents) {
+    const video = item?.videoRenderer;
+    if (!video?.videoId) continue;
+    return {
+      videoUrl:  `https://www.youtube.com/watch?v=${video.videoId}`,
+      title:     safeFileName(video.title?.runs?.[0]?.text || "audio"),
+      thumbnail: `https://i.ytimg.com/vi/${video.videoId}/sddefault.jpg`,
+    };
+  }
+
+  throw new Error("No se encontraron videos para esa búsqueda.");
+}
+
+// ─── Obtener link de descarga ─────────────────────────────────────────────────
+async function getAudioLink(videoUrl) {
+  const res = await axios.get(`${API_BASE}/ytmp3`, {
+    params: { url: videoUrl, quality: AUDIO_QUALITY, apikey: APIKEY },
+    timeout: 60000,
+    validateStatus: () => true,
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      Accept: "application/json",
+      "x-api-key": APIKEY,
+    },
   });
-});
-}));
 
-Module({
-  pattern: 'ytv ?(.*)',
-  fromMe: fm,
-  desc: Lang.YTV_DESC,
-  use: 'download'
-}, (async (message, match) => {
-  if (!match[1]) return message.sendReply("_Need YouTube video link!_")
-  if (match[1].startsWith('dl;')){
-    const link = match[1].split(';')[2]
-    const res_ = match[1].split(';')[1]
-    let progress = await message.sendReply(`_Downloading ${res_}: 0%_`)
-    message.progressKey = progress.key
-    const result__ = await ytv(link,res_,message)
-    const title = await ytTitle(link)
-    await message.edit(`_Uploading to WhatsApp servers.._`,message.jid,message.progressKey)
-    await message.client.sendMessage(message.jid,{document:result__,mimetype:"video/mp4",fileName:`${title} [${res_}].mp4`},{quoted: message.data});
-    return await message.edit(`_Download complete!_`,message.jid,message.progressKey)
-  }
-  var link = match[1].match(/\bhttps?:\/\/\S+/gi)
-  if (link !== null && getID.test(link[0])) {
-  link = link[0].match(getID)[1]
-  const result_ = await getResolutions(link)
-  let list = {
-    type: 'single_select',
-    head: {
-      title: "*Select a resolution*",
-      subtitle:"",
-      footer: `Avaiable resolutions: ${result_.length}`
-    },
-    body : {
-    title:"Select resolution",
-    sections:[
-    {
-    title:"Select a resolution",
-    highlight_label:"Highest",
-    rows:[]
-    }
-    ]
-    }
-  }
-  for (var i of result_){
-    list.body.sections[0].rows.push({
-      title:i.fps60?i.quality+' 60fps':i.quality,
-      description:i.size,
-      id: handler+"ytv dl;"+(i.fps60?i.quality+'60':i.quality)+';'+link
-  })
-  }
- return await message.sendInteractiveMessage(message.jid, list,{quoted: message.data})
+  const d = res.data;
+  if (res.status >= 400 || d?.ok === false)
+    throw new Error(d?.detail || d?.message || `HTTP ${res.status}`);
+
+  const dlUrl =
+    d?.download_url_full || d?.stream_url_full ||
+    d?.download_url      || d?.stream_url      || d?.url || "";
+
+  if (!dlUrl) throw new Error("La API no devolvió link de descarga.");
+
+  return {
+    dlUrl:     dlUrl.startsWith("/") ? `${API_BASE}${dlUrl}` : dlUrl,
+    title:     safeFileName(d?.title || "audio"),
+    fileName:  d?.filename || "audio.mp3",
+    thumbnail: d?.thumbnail || null,
+  };
 }
-}));
-Module({
-  pattern: 'song ?(.*)',
-  fromMe: fm,
-  desc: Lang.SONG_DESC,
-  use: 'download'
-}, (async (message, match) => {
-  if (!match[1]) return message.sendReply(Lang.NEED_TEXT_SONG)
-  if (match[1].includes('open.spotify.com')) return message.sendReply("_Please use the .spotify command!_")
-  var link = match[1].match(/\bhttps?:\/\/\S+/gi)
-  if (link !== null && getID.test(link[0])) {
-  let v_id = link[0].match(getID)[1]
-  const title = await ytTitle(v_id);
-  await message.sendReply(`*Downloading:* _${title}_`)
-  let sdl = await dlSong(v_id);
-  ffmpeg(sdl)
-  .save('./temp/song.mp3')
-  .on('end', async () => { 
-  var song = await addInfo('./temp/song.mp3',title,BOT_INFO.split(";")[0],"Raganork audio downloader",await skbuffer(`https://i3.ytimg.com/vi/${link[0].match(getID)[1]}/hqdefault.jpg`))
-  return await message.client.sendMessage(message.jid, {
-      audio:song,
-      mimetype: 'audio/mp4'
-  }, {
-      quoted: message.data
+
+// ─── Descargar audio ──────────────────────────────────────────────────────────
+async function downloadAudio(downloadUrl, outputPath) {
+  const response = await axios.get(downloadUrl, {
+    responseType: "stream",
+    timeout: REQUEST_TIMEOUT,
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*", "x-api-key": APIKEY },
+    validateStatus: () => true,
+    maxRedirects: 10,
   });
- }); 
-} else {
-  var sr = await searchYT(match[1]);
-  sr = sr.videos.splice(0,21);
-  if (sr.length < 1) return await message.sendReply(Lang.NO_RESULT);
-  let searchImage = await getSearchImage(sr[0].id);
-  let list = {
-    type:'single_select',
-    head: {
-      title: "*Matching songs for "+match[1]+'*',
-      subtitle:"",
-      footer: "Showing "+sr.length+" results"
-    },
-    body : {
-    title:"Select song",
-    sections:[
-    {
-    title:"Select a song",
-    highlight_label:"Matching",
-    rows:[]
-    }
-    ]
-    }
-  }
-  for (var i in sr){
-    const title = sr[i].title?.text
-    if (title){
-    list.body.sections[0].rows.push({
-      title,
-      description: sr[i].duration?.text,
-      id: handler+"song https://youtu.be/" + sr[i].id
-  })
-  }
-  }
-  return await message.sendInteractiveMessage(message.jid, list,{quoted: message.data,image:{url:searchImage}})
-}
-}));
 
-Module({
-  pattern: 'yts ?(.*)',
-  fromMe: fm,
-  desc: "Select and download songs from yt (list)",
-  use: 'search'
-}, (async (message, match) => {
-  if (!match[1]) return message.sendReply("*Need words*")
-  var link = match[1].match(/\bhttps?:\/\/\S+/gi)
-  if (link !== null && getID.test(link[0])) {
-    var {
-  info,
-  thumbnail
-} = await getJson("https://raganork-network.vercel.app/api/youtube/details?video_id=" +link[0].split("/")[3]);
-let buttons = {
-  type: 'quick_reply',
-  head: {
-    title: info,
-    subtitle:"",
-    footer: `Select media type`
-  },
-  body: [
-    {
-      name: "quick_reply",
-      buttonParamsJson: `{"display_text":"𝗩𝗜𝗗𝗘𝗢","id":"${handler}video ${link[0]}"}`
-    },
-    {
-      name: "quick_reply",
-      buttonParamsJson: `{"display_text":"𝗔𝗨𝗗𝗜𝗢","id":"${handler}song ${link[0]}"}`
-    },
-    {
-      name: "cta_url",
-      buttonParamsJson: `{"display_text":"𝗪𝗔𝗧𝗖𝗛","url":"${link[0]}","merchant_url":"${link[0]}"}`
-    }
-  ]
-}
-return await message.sendInteractiveMessage(message.jid, buttons,{quoted: message.data,image:{url:thumbnail}})
-}
-  let sr = await searchYT(match[1]);
-  sr = sr.videos;
-  if (sr.length < 1) return await message.sendReply("*No results found!*");
-  let searchImage = await getSearchImage(sr[0].id);
-  let list = {
-    type: 'single_select',
-    head: {
-      title: "*Matching results for "+match[1]+'*',
-      subtitle:"",
-      footer: ''
-    },
-    body : {
-    title:"Select a video",
-    sections:[
-    {
-    title:"Select a song",
-    highlight_label:"Matching",
-    rows:[]
-    }
-    ]
-    }
-  }
-  for (var i in sr){
-    const title = sr[i].title?.text
-    if (title && sr[i].duration?.text){
-    list.body.sections[0].rows.push({
-      title,
-      description: sr[i].duration?.text,
-      id: handler+"yts https://youtu.be/" + sr[i].id
-  })
-  }
-  }
-  list.head.footer = "Found "+list.body.sections[0].rows.length+" results"
-  return await message.sendInteractiveMessage(message.jid, list,{quoted: message.data,image:{url:searchImage}})
-}));
-/
+  if (response.status >= 400)
+    throw new Error(`Error al descargar: HTTP ${response.status}`);
 
-IN CASE BUTTON VEENDUM OOMFIYAL:
-
-Module({
-  pattern: 'ytv ?(.*)',
-  fromMe: fm,
-  desc: Lang.YTV_DESC,
-  use: 'download'
-}, (async (message, match) => {
-  if (!match[1]) return message.sendReply("_Need YouTube video link!_")
-  if (match[1].startsWith('dl;')){
-    const link = match[1].split(';')[2]
-    const res_ = match[1].split(';')[1]
-    const result__ = await ytv(link,res_)
-    const title = await ytTitle(link)
-    return await message.client.sendMessage(message.jid,{video:result__,caption:`_${title} *[${res_}]*_`},{quoted:message.data}) 
-  }
-  var link = match[1].match(/\bhttps?:\/\/\S+/gi)
-  if (link !== null && getID.test(link[0])) {
-  link = link[0].match(getID)[1]
-  var list = `_*Available quality resolutions:*_\n_video_id: ${link}_\n`
-  const result_ = await getResolutions(link)
-  for (var i in result_){
-    list+=`${(parseInt(i)+1)}. _*${result_[i].fps60?result_[i].quality+' 60fps':result_[i].quality} (${result_[i].size})*_\n`
-  }
-    list+=`\n_Send number as reply to download_`
- return await message.sendReply(list)
-}
-}));
-
-Module({
-  pattern: 'song ?(.*)',
-  fromMe: fm,
-  desc: Lang.SONG_DESC,
-  use: 'download'
-}, (async (message, match) => {
-  if (!match[1] && !message.reply_message?.text) return message.sendReply(Lang.NEED_TEXT_SONG)
-  var link = (match[1] || message.reply_message?.text).match(/\bhttps?:\/\/\S+/gi)
-  if (link !== null && getID.test(link[0])) {
-  let v_id = link[0].match(getID)[1]
-  const title = await ytTitle(v_id);
-  await message.sendReply(`*Downloading:* _${title}_`)
-  let sdl = await dlSong(v_id);
-  ffmpeg(sdl)
-  .save('./temp/song.mp3')
-  .on('end', async () => { 
-  var song = await addInfo('./temp/song.mp3',title,BOT_INFO.split(";")[0],"Raganork audio downloader",await skbuffer(`https://i3.ytimg.com/vi/${link[0].match(getID)[1]}/hqdefault.jpg`))
-  return await message.client.sendMessage(message.jid, {
-      audio:song,
-      mimetype: 'audio/mp4'
-  }, {
-      quoted: message.data
+  let downloaded = 0;
+  response.data.on("data", (chunk) => {
+    downloaded += chunk.length;
+    if (downloaded > MAX_AUDIO_BYTES)
+      response.data.destroy(new Error("Audio demasiado grande."));
   });
- }); 
-} else {
-  var myid = message.client.user.id.split("@")[0].split(":")[0]
-  var sr = await searchYT(match[1]);
-  sr = sr.videos.splice(0,20);
-  if (sr.length < 1) return await message.sendReply(Lang.NO_RESULT);
-  var list = `_*Results matching "${match[1]}":*_\n\n` // format using Lang.MATCHING_SONGS
-  var _i = 0;
-  for (var i in sr){
-    const title = sr[i].title?.text
-    const dur = sr[i].thumbnail_overlays[0]?.text
-    if (title && dur){
-      _i++
-      list+=`${_i}. *_${title} (${dur})_*\n`
+
+  try {
+    await pipeline(response.data, fs.createWriteStream(outputPath));
+  } catch (e) {
+    deleteFileSafe(outputPath);
+    throw e;
   }
+
+  if (!fs.existsSync(outputPath)) throw new Error("No se pudo guardar el audio.");
+
+  const size = fs.statSync(outputPath).size;
+  if (!size || size < 10000) {
+    deleteFileSafe(outputPath);
+    throw new Error("Audio inválido o vacío.");
   }
-  list+=`\n_Send number as reply to download_`
-  return await message.sendReply(list)
+
+  const detectedName = parseContentDisposition(response.headers?.["content-disposition"]);
+  const sniffed      = detectAudioType(outputPath);
+  const ext          = sniffed?.ext || "mp3";
+  const base         = safeFileName(path.parse(detectedName || "audio").name || "audio");
+
+  return {
+    size,
+    fileName: `${base}.${ext}`,
+    mime:     sniffed?.mime || "audio/mpeg",
+    isMp3:    sniffed?.isMp3 ?? true,
+  };
 }
-}));
-Module({
-  pattern: 'yts ?(.*)',
-  fromMe: fm,
-  desc: "Select and download songs from yt (list)",
-  use: 'search'
-}, (async (message, match) => {
-  if (!match[1]) return message.sendReply("*Need words*")
-  var link = match[1].match(/\bhttps?:\/\/\S+/gi)
-  if (link !== null && getID.test(link[0])) {
-    var {
-  info,
-  thumbnail
-} = await getJson("https://raganork-network.vercel.app/api/youtube/details?video_id=" +link[0].split("/")[3]);
-const Message = {
-    image: {url: thumbnail},
-    caption: info+`\n\n1. 𝗔𝗨𝗗𝗜𝗢\n2. 𝗩𝗜𝗗𝗘𝗢`
+
+// ─── Convertir a MP3 ──────────────────────────────────────────────────────────
+async function convertToMp3(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", [
+      "-y", "-i", inputPath,
+      "-vn", "-c:a", "libmp3lame",
+      "-b:a", AUDIO_QUALITY,
+      "-ar", "44100", "-ac", "2",
+      "-map_metadata", "-1",
+      "-loglevel", "error",
+      outputPath,
+    ], { stdio: ["ignore", "ignore", "pipe"] });
+
+    let errText = "";
+    ff.stderr.on("data", (c) => (errText += c.toString()));
+    ff.on("error", (e) =>
+      reject(e?.code === "ENOENT" ? new Error("ffmpeg no instalado.") : e)
+    );
+    ff.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(errText.trim() || `ffmpeg error ${code}`))
+    );
+  });
 }
-return await message.client.sendMessage(message.jid,Message)
-  }
-  let sr = await searchYT(match[1]);
-  sr = sr.videos.splice(0,20);
-  if (sr.length < 1) return await message.sendReply("*No results found!*");
-  var list = `_*Search results for ${match[1]}:*_\n\n`
-  var _i = 0;
-  for (var i in sr){
-    const title = sr[i].title?.text
-    const dur = sr[i].thumbnail_overlays?.[0]?.text
-    if (title && dur){
-      _i++
-      list+=`${_i}. *_${title} (${dur})_*\n`
-  }
-  }
-  list+=`\n_Send number as reply to download_`
-  return await message.sendReply(list)
-  }));
 
-// Reply listeners:
+// ─── Comando ──────────────────────────────────────────────────────────────────
+export default {
+  name: "ytmp3",
+  aliases: ["play", "mp3", "song"],
 
+  async run(sock, msg, args, jid) {
+    const input = args.join(" ").trim();
 
-async function parseReply(reply,no_){
-  let YT_BASEURL = "https://youtu.be/{}"
-  if (reply?.includes("ᴄʜᴀɴɴᴇʟ")){
-    let regex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=)?([a-zA-Z0-9_-]{11})\b/g;
-    let matches = reply.match(regex)
-    return matches[0].match(getID)[1]
-  }
-  if (reply?.includes("Available quality")){
-    var query = reply.split("\n").filter(x=>x.startsWith(`${no_}.`))?.[0]?.replace(`${no_}. `,"").trim().replace(/(\*\_|_\*)/g,"")  
-    query = (query.replace(query.match(/\([^)]+\)/g)[(query.match(/\([^)]+\)/g)).length-1],"")).trim()
-    var videoID = reply.split("\n").filter(x=>x.startsWith(`_video_id`))?.[0]?.split(" ")[1].trim().replace(/_+$/, "");  
-    return {res:query,videoID}
-  }
-  if (reply?.includes("Available quality")){
-    var query = reply.split("\n").filter(x=>x.startsWith(`${no_}.`))?.[0]?.replace(`${no_}. `,"").trim().replace(/(\*\_|_\*)/g,"")  
-    query = (query.replace(query.match(/\([^)]+\)/g)[(query.match(/\([^)]+\)/g)).length-1],"")).trim()
-    var videoID = reply.split("\n").filter(x=>x.startsWith(`_video_id`))?.[0]?.split(" ")[1].trim().replace(/_+$/, "");  
-    return {res:query,videoID}
-  }
-  if (reply?.includes("Subtitles matching")){
-    var query = reply.split("\n").filter(x=>x.startsWith(`${no_}.`))?.[0]?.replace(`${no_}. `,"").trim().replace(/(\*\_|_\*)/g,"")  
-    return query
-  }
-  if (reply?.includes("Settings configuration menu")){
-    var query = reply.split("\n").filter(x=>x.startsWith(`${no_}.`))?.[0]?.replace(`${no_}. `,"").trim().replace(/(\*\_|_\*)/g,"")  
-    return query
-  }
-  var query = reply.split("\n").filter(x=>x.startsWith(`${no_}.`))?.[0]?.replace(`${no_}. `,"").trim().replace(/(\*\_|_\*)/g,"")
-  if (!query) throw "_Invalid number, only 20 results are given!_"
-  query = (query.replace(query.match(/\([^)]+\)/g)[(query.match(/\([^)]+\)/g)).length-1],"")).trim()
-  var sr = await searchYT(query);
-  sr = sr.videos.splice(0,20)
-  sr = sr.filter(x=>x.title?.text == (query))[0]
-  if (!sr?.id) throw "_No results found!_"
-  // let link = YT_BASEURL.format(sr?.id)
-  return sr?.id         
-  }
+    if (!input) {
+      return reply(sock, jid,
+        "❌ *Uso:*\n`.play <nombre de canción>`\n`.play <link de YouTube>`",
+        msg
+      );
+    }
 
-Module({
-  on: 'text',
-  fromMe: fm
-  }, (async (message, match) => {
-  if (message.reply_message){
-    try { 
-  let reply = message.reply_message?.text || message.quoted?.message?.imageMessage?.caption;
-    if (reply!==undefined && !!reply && (message.quoted.key.id.startsWith("RGNK") || message.quoted.key.id.startsWith("BAE")) && message.quoted.key.participant.includes(message.myjid)){
-      let no_ = /\d+/.test(message.message) ? message.message.match(/\d+/)[0] : false
-      let onOrOff = (message.message.toLowerCase().includes('on') || message.message.toLowerCase().includes('off')) ? message.message.toLowerCase().trim() : false
-      if (onOrOff && message.fromOwner){
-        let action = onOrOff == 'on'?'true':'false';
-        let set_action = reply.split('\n')[0].replace(/(\*\_|_\*)/g,"")
-        if (configs.map(e=>e.title).includes(set_action)){
-        let {env_var} = configs.filter(e=>e.title==set_action)[0]
-        await message.sendReply(`*${set_action} ${(onOrOff == 'on'?"enabled ✅":"disabled ❌")}*`)
-        await setVar(env_var.trim(),action)
+    const sourceFile = path.join(TEMP_DIR, `yt_src_${Date.now()}.bin`);
+    const mp3File    = path.join(TEMP_DIR, `yt_mp3_${Date.now()}.mp3`);
+
+    try {
+      let videoUrl  = extractYouTubeUrl(input);
+      let title     = "audio";
+      let thumbnail = null;
+
+      if (!videoUrl) {
+        if (isHttpUrl(input))
+          return reply(sock, jid, "❌ Envía un link válido de YouTube.", msg);
+
+        await reply(sock, jid, `🔍 Buscando: *${input}*...`, msg);
+
+        const search = await searchYouTube(input);
+        videoUrl  = search.videoUrl;
+        title     = search.title;
+        thumbnail = search.thumbnail;
       }
+
+      if (thumbnail) {
+        await sock.sendMessage(jid, {
+          image: { url: thumbnail },
+          caption: [
+            "🎵 *Descargando audio...*",
+            `🎧 ${title}`,
+            `🎚️ Calidad: ${AUDIO_QUALITY}`,
+            "⏳ Espera un momento...",
+          ].join("\n"),
+        }, { quoted: msg });
+      } else {
+        await reply(sock, jid, `🎵 *Descargando:* ${title}\n⏳ Espera...`, msg);
       }
-      if (!no_) return;
-          if (reply?.includes("Search results")){
-            let videoID = await parseReply(reply,no_);
-            var {
-              info,
-              thumbnail
-            } = await getJson("https://raganork-network.vercel.app/api/youtube/details?video_id=" +videoID);
-            const Message = {
-                image: {url: thumbnail},
-                caption: info+`\n\n1. 𝗔𝗨𝗗𝗜𝗢\n2. 𝗩𝗜𝗗𝗘𝗢`
-            }
-            return await message.client.sendMessage(message.jid,Message)
-            }            
-          if (reply?.includes("Settings configuration menu")){
-            let item = await parseReply(reply,no_);
-            let {env_var} = configs.filter(e=>e.title==item)[0]
-            let msgToBeSent = `_*${item}*_\n\n_Current status: ${config[env_var] ?'on':'off'}_\n\n_Reply *on/off*_`;
-            return await message.sendReply(msgToBeSent)
-            }                        
-          if (reply?.includes("Available quality")){
-              let {res,videoID} = await parseReply(reply,no_);
-              const result__ = await ytv(videoID,res)
-              const title = await ytTitle(videoID)
-              return await message.client.sendMessage(message.jid,{video:result__,caption:`_${title} *[${res}]*_`},{quoted:message.data}) 
-          }
-          if (reply?.includes("Subtitles matching")){
-              let query = await parseReply(reply,no_);
-              let res = (await require("axios")(`https://raganork.tk/api/subtitles?query=${query}`)).data
-              if (res.length) res = res.filter(x=>x.title == query)
-              res = (await require("axios")(`https://raganork.tk/api/subtitles?query=${res[0].url}`)).data
-              if (res.length && !('dl_url' in res)) 
-              {
-                res = res.filter(x=>x.title == query)
-                res = (await require("axios")(`https://raganork.tk/api/subtitles?query=${res[0].url}`)).data
-              }
-              if ('dl_url' in res) {
-                return await message.client.sendMessage(message.jid,{document: {url: res.dl_url},fileName:res.title+'.srt',caption:'_*Here\'s your subtitle file!*_',mimetype:'application/x-subrip'},{quoted:message.data})
-              } 
-            }
-          if (reply?.includes("Results matching")){
-            let videoID = await parseReply(reply,no_);
-              const title = await ytTitle(videoID);
-              await message.sendReply(`*Downloading:* _${title}_`)
-              let sdl = await dlSong(videoID);
-              ffmpeg(sdl)
-              .save('./temp/song.mp3')
-              .on('end', async () => { 
-              var song = await addInfo('./temp/song.mp3',title,BOT_INFO.split(";")[0],"Raganork audio downloader",await skbuffer(`https://i3.ytimg.com/vi/${videoID}/hqdefault.jpg`))
-              return await message.client.sendMessage(message.jid, {
-                  audio:song,
-                  mimetype: 'audio/mp4'
-              }, {
-                  quoted: message.data
-              });
-             }); 
-          }
-          if (reply?.includes("ᴄʜᴀɴɴᴇʟ")){
-            if (no_ == 1){
-              let videoID = await parseReply(reply,no_);
-              const title = await ytTitle(videoID);
-              await message.sendReply(`*Downloading:* _${title}_`)
-              let sdl = await dlSong(videoID);
-              ffmpeg(sdl)
-              .save('./temp/song.mp3')
-              .on('end', async () => { 
-              var song = await addInfo('./temp/song.mp3',title,BOT_INFO.split(";")[0],"Raganork audio downloader",await skbuffer(`https://i3.ytimg.com/vi/${videoID}/hqdefault.jpg`))
-              return await message.client.sendMessage(message.jid, {
-                  audio:song,
-                  mimetype: 'audio/mp4'
-              }, {
-                  quoted: message.data
-              });
-             }); 
-            } if (no_ == 2){
-              let videoID = await parseReply(reply,no_);
-              await message.sendReply("_Downloading video..._")
-              const video = await ytv(videoID)
-              const caption = "_"+(await ytTitle(videoID))+"_"
-              return await message.client.sendMessage(message.jid, {
-              video,
-              mimetype: "video/mp4",
-              caption,
-              thumbnail: await skbuffer(`https://i.ytimg.com/vi/${videoID}/hqdefault.jpg`)
-        },{quoted:message.data});
-            } else throw "_Invalid number, reply 1 for audio and 2 for video_"
-          };
+
+      const link      = await getAudioLink(videoUrl);
+      title           = link.title || title;
+      const audioInfo = await downloadAudio(link.dlUrl, sourceFile);
+
+      let fileToSend     = sourceFile;
+      let fileNameToSend = audioInfo.fileName || `${safeFileName(title)}.mp3`;
+      let mimeToSend     = audioInfo.mime;
+
+      if (!audioInfo.isMp3) {
+        try {
+          await convertToMp3(sourceFile, mp3File);
+          fileToSend     = mp3File;
+          fileNameToSend = `${safeFileName(title)}.mp3`;
+          mimeToSend     = "audio/mpeg";
+        } catch {
+          await sock.sendMessage(jid, {
+            document: { url: fileToSend },
+            mimetype: mimeToSend,
+            fileName: fileNameToSend,
+            caption: `🎵 ${title}`,
+          }, { quoted: msg });
+          return;
         }
-       } catch (error) {
-          console.log("")
-        }  
       }
-  }));*/
+
+      try {
+        await sock.sendMessage(jid, {
+          audio: { url: fileToSend },
+          mimetype: "audio/mpeg",
+          ptt: false,
+          fileName: fileNameToSend,
+        }, { quoted: msg });
+      } catch {
+        await sock.sendMessage(jid, {
+          document: { url: fileToSend },
+          mimetype: mimeToSend,
+          fileName: fileNameToSend,
+          caption: `🎵 ${title}`,
+        }, { quoted: msg });
+      }
+
+    } catch (e) {
+      const raw = String(e?.message || "").toLowerCase();
+      let humanMsg = `❌ ${e.message || "Error al descargar el audio."}`;
+
+      if (raw.includes("bad gateway") || raw.includes("502") || raw.includes("503"))
+        humanMsg = "⚠️ El servidor de descargas está saturado.\n🔁 Intenta más tarde.";
+
+      await reply(sock, jid, humanMsg, msg);
+    } finally {
+      deleteFileSafe(sourceFile);
+      deleteFileSafe(mp3File);
+    }
+  }
+};
