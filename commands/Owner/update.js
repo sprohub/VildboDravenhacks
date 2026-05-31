@@ -7,7 +7,7 @@ const execAsync = promisify(exec);
 export default {
   name: "up",
   aliases: ["actualizar"],
-  ownerOnly: true,
+
 
   async run(sock, msg, args, chatId) {
     try {
