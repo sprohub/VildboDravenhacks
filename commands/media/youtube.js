@@ -4,14 +4,15 @@ import axios from "axios";
 import { pipeline } from "stream/promises";
 import { spawn } from "child_process";
 import config from "../../config.js";
-import { reply, safeFileName, tempPath } from "../../utils.js";
+import { reply, safeFileName } from "../../utils.js";
 
-const API_BASE          = config.apiBase;
-const APIKEY            = config.apiKey;
-const TEMP_DIR          = config.tempDir;
-const REQUEST_TIMEOUT   = 120000;
-const MAX_AUDIO_BYTES   = 100 * 1024 * 1024;
-const AUDIO_QUALITY     = "128k";
+// ─── Configuración de la API ──────────────────────────────────────────────────
+const API_BASE        = "https://api.delirius.store";
+const APIKEY          = "DH9ehJ1bo1Y";               // ← pon tu API key aquí si la tienes
+const TEMP_DIR        = config.tempDir;
+const REQUEST_TIMEOUT = 120000;
+const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
+const AUDIO_QUALITY   = "128k";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function deleteFileSafe(fp) {
@@ -90,34 +91,34 @@ async function searchYouTube(query) {
   throw new Error("No se encontraron videos para esa búsqueda.");
 }
 
-// ─── Obtener link de descarga ─────────────────────────────────────────────────
+// ─── Obtener link de descarga (api.delirius.store) ───────────────────────────
 async function getAudioLink(videoUrl) {
   const res = await axios.get(`${API_BASE}/ytmp3`, {
-    params: { url: videoUrl, quality: AUDIO_QUALITY, apikey: APIKEY },
+    params: { url: videoUrl, apikey: APIKEY },
     timeout: 60000,
     validateStatus: () => true,
     headers: {
       "User-Agent": "Mozilla/5.0",
       Accept: "application/json",
-      "x-api-key": APIKEY,
     },
   });
 
   const d = res.data;
-  if (res.status >= 400 || d?.ok === false)
+  if (res.status >= 400 || d?.status === false)
     throw new Error(d?.detail || d?.message || `HTTP ${res.status}`);
 
-  const dlUrl =
-    d?.download_url_full || d?.stream_url_full ||
-    d?.download_url      || d?.stream_url      || d?.url || "";
+  // Estructura: { status: true, data: { title, author, image, format, download } }
+  const info  = d?.data || d;
+  const dlUrl = info?.download || "";
 
   if (!dlUrl) throw new Error("La API no devolvió link de descarga.");
 
   return {
-    dlUrl:     dlUrl.startsWith("/") ? `${API_BASE}${dlUrl}` : dlUrl,
-    title:     safeFileName(d?.title || "audio"),
-    fileName:  d?.filename || "audio.mp3",
-    thumbnail: d?.thumbnail || null,
+    dlUrl:     dlUrl,
+    title:     safeFileName(info?.title  || "audio"),
+    author:    info?.author  || "",
+    fileName:  `${safeFileName(info?.title || "audio")}.${info?.format || "mp3"}`,
+    thumbnail: info?.image   || null,
   };
 }
 
@@ -126,7 +127,7 @@ async function downloadAudio(downloadUrl, outputPath) {
   const response = await axios.get(downloadUrl, {
     responseType: "stream",
     timeout: REQUEST_TIMEOUT,
-    headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*", "x-api-key": APIKEY },
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "*/*" },
     validateStatus: () => true,
     maxRedirects: 10,
   });
@@ -216,6 +217,7 @@ export default {
       let title     = "audio";
       let thumbnail = null;
 
+      // ── Si es texto, buscar en YouTube primero ────────────────────────────
       if (!videoUrl) {
         if (isHttpUrl(input))
           return reply(sock, jid, "❌ Envía un link válido de YouTube.", msg);
@@ -228,28 +230,36 @@ export default {
         thumbnail = search.thumbnail;
       }
 
+      // ── Obtener info y link de descarga desde la API ──────────────────────
+      const link = await getAudioLink(videoUrl);
+      title      = link.title     || title;
+      thumbnail  = link.thumbnail || thumbnail;
+      const author = link.author  || "";
+
+      // ── Enviar preview con thumbnail ──────────────────────────────────────
       if (thumbnail) {
         await sock.sendMessage(jid, {
           image: { url: thumbnail },
           caption: [
             "🎵 *Descargando audio...*",
             `🎧 ${title}`,
+            author ? `👤 ${author}` : "",
             `🎚️ Calidad: ${AUDIO_QUALITY}`,
             "⏳ Espera un momento...",
-          ].join("\n"),
+          ].filter(Boolean).join("\n"),
         }, { quoted: msg });
       } else {
         await reply(sock, jid, `🎵 *Descargando:* ${title}\n⏳ Espera...`, msg);
       }
 
-      const link      = await getAudioLink(videoUrl);
-      title           = link.title || title;
+      // ── Descargar el archivo de audio ─────────────────────────────────────
       const audioInfo = await downloadAudio(link.dlUrl, sourceFile);
 
       let fileToSend     = sourceFile;
       let fileNameToSend = audioInfo.fileName || `${safeFileName(title)}.mp3`;
       let mimeToSend     = audioInfo.mime;
 
+      // ── Convertir a MP3 si no lo es ya ────────────────────────────────────
       if (!audioInfo.isMp3) {
         try {
           await convertToMp3(sourceFile, mp3File);
@@ -257,8 +267,9 @@ export default {
           fileNameToSend = `${safeFileName(title)}.mp3`;
           mimeToSend     = "audio/mpeg";
         } catch {
+          // Si ffmpeg falla, mandar como documento igual
           await sock.sendMessage(jid, {
-            document: { url: fileToSend },
+            document: fs.readFileSync(fileToSend),
             mimetype: mimeToSend,
             fileName: fileNameToSend,
             caption: `🎵 ${title}`,
@@ -267,16 +278,18 @@ export default {
         }
       }
 
+      // ── Enviar audio ──────────────────────────────────────────────────────
       try {
         await sock.sendMessage(jid, {
-          audio: { url: fileToSend },
+          audio: fs.readFileSync(fileToSend),
           mimetype: "audio/mpeg",
           ptt: false,
           fileName: fileNameToSend,
         }, { quoted: msg });
       } catch {
+        // Fallback a documento si el audio falla
         await sock.sendMessage(jid, {
-          document: { url: fileToSend },
+          document: fs.readFileSync(fileToSend),
           mimetype: mimeToSend,
           fileName: fileNameToSend,
           caption: `🎵 ${title}`,
